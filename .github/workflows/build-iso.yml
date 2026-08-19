@@ -97,7 +97,7 @@ jobs:
               mkdir -p "$WORKDIR/work" "$WORKDIR/out"
 
               # Use the installed archiso
-              ARCHISO_DIR=/usr/share/archiso
+              # mkarchiso is at /usr/bin/mkarchiso
 
               # Copy our profile
               echo "Copying profile..."
@@ -114,8 +114,8 @@ jobs:
               # Build the ISO
               echo ""
               echo "═══ Building ISO ═══"
-              cd "$ARCHISO_DIR"
-              ./mkarchiso -v \
+              
+              mkarchiso -v \
                 -w "$WORKDIR/work" \
                 -o "$WORKDIR/out" \
                 "$WORKDIR/profile"

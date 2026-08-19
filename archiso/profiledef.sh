@@ -4,7 +4,7 @@
 
 iso_name="arch-custom"
 iso_label="ARCH_CUSTOM_$(date +%Y%m)"
-iso_publisher="Arch Custom <https://github.com/max/arch-custom>"
+iso_publisher="Arch Custom <https://github.com/MaxEdgar/arch-custom>"
 iso_application="Arch Custom Linux — Minimal Install"
 iso_version="$(date +%Y.%m.%d)"
 install_dir="arch"
@@ -15,10 +15,4 @@ bootmodes=(
 )
 arch="x86_64"
 kernel=()
-bootloader=""
-bootloader_options=()
-microcode=(
-    'ucode.img'
-    'ucode.cpio'
-)
 mkarchiso_opts=("-v")
