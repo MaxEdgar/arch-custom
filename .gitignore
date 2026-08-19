@@ -1,0 +1,56 @@
+# ═══════════════════════════════════════════════════════════════════
+# Arch Custom ISO — .gitignore
+# ═══════════════════════════════════════════════════════════════════
+
+# Build artifacts
+*.iso
+*.iso.sha256
+*.iso.sha512
+*.sha256
+*.sha512
+artifacts/
+build/
+work/
+out/
+
+# Logs
+*.log
+build.log
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+*.bak.*
+
+# Secrets and credentials
+.env
+.env.local
+.env.production
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Node (if using any tooling)
+node_modules/
+package-lock.json
+
+# Archiso build cache
+/var/cache/
+squashfs-root/

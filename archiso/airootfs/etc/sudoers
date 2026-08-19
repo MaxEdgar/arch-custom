@@ -1,0 +1,10 @@
+# /etc/sudoers — Arch Custom ISO
+## Sudoers file for the live installer environment
+
+Defaults !pwfeedback
+Defaults !logfile
+Defaults !mail_badpass
+Defaults use_pty
+
+root    ALL=(ALL:ALL) ALL
+%wheel  ALL=(ALL:ALL) ALL

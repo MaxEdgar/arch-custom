@@ -1,0 +1,840 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# Arch Custom Installer
+# A minimal, fast, keyboard-friendly Arch Linux installer.
+# Replaces archinstall with a modular, safe-by-default design.
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+# ── Constants ─────────────────────────────────────────────────────
+INSTALLER_VERSION="1.0.0"
+INSTALLER_NAME="Arch Custom Installer"
+LOGFILE="/var/log/arch-install.log"
+CONF_FILE="/tmp/arch-install.conf"
+WORK_DIR="/tmp/arch-install"
+
+# ── Colors ────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ── Logging ───────────────────────────────────────────────────────
+mkdir -p "$(dirname "$LOGFILE")"
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOGFILE"; }
+die() { echo -e "${RED}ERROR:${NC} $*" >&2; log "FATAL: $*"; exit 1; }
+info() { echo -e "${GREEN}→${NC} $*"; log "INFO: $*"; }
+warn() { echo -e "${YELLOW}!${NC} $*"; log "WARN: $*"; }
+step() { echo -e "\n${CYAN}═══ $* ═══${NC}"; log "STEP: $*"; }
+
+# ── Helpers ───────────────────────────────────────────────────────
+confirm() {
+    local msg="$1"
+    echo -e "\n${BOLD}${YELLOW}CONFIRM:${NC} $msg"
+    read -rp "Type YES to confirm: " ans
+    [[ "$ans" == "YES" ]] || { echo -e "${RED}Aborted.${NC}"; return 1; }
+}
+
+set_conf() { echo "$2" >> "$CONF_FILE"; }
+get_conf() { grep "^${1}=" "$CONF_FILE" 2>/dev/null | cut -d= -f2- || echo ""; }
+
+# ── Step 0: Keyboard Layout ──────────────────────────────────────
+step_keyboard() {
+    step "0/24 — Keyboard Layout"
+
+    local layouts=("us" "uk" "de" "fr" "es" "it" "pt" "nl" "se" "no" "dk" "fi" "jp" "kr" "cn" "br" "latam")
+    local labels=("US English (QWERTY)" "UK English" "German (QWERTZ)" "French (AZERTY)" "Spanish" "Italian" "Portuguese" "Dutch" "Swedish" "Norwegian" "Danish" "Finnish" "Japanese" "Korean" "Chinese" "Brazilian" "Latin American")
+
+    local list_args=()
+    for i in "${!layouts[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select keyboard layout:" 20 70 12 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    local layout="${layouts[$choice]}"
+    set_conf "keyboard_layout" "$layout"
+
+    # Apply immediately
+    loadkeys "$layout" 2>/dev/null || true
+
+    info "Keyboard layout: $layout"
+}
+
+# ── Step 1: Locale ───────────────────────────────────────────────
+step_locale() {
+    step "1/24 — Locale"
+
+    local locales=("en_US.UTF-8" "en_GB.UTF-8" "de_DE.UTF-8" "fr_FR.UTF-8" "es_ES.UTF-8" "it_IT.UTF-8" "pt_BR.UTF-8" "ja_JP.UTF-8" "ko_KR.UTF-8" "zh_CN.UTF-8" "ru_RU.UTF-8")
+    local list_args=()
+    for i in "${!locales[@]}"; do
+        list_args+=("$i" "${locales[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select locale:" 20 60 10 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    local locale="${locales[$choice]}"
+    set_conf "locale" "$locale"
+    set_conf "locale_gen" "$locale"
+
+    info "Locale: $locale"
+}
+
+# ── Step 2: Timezone ─────────────────────────────────────────────
+step_timezone() {
+    step "2/24 — Timezone"
+
+    local tzones=("UTC" "US/Eastern" "US/Central" "US/Mountain" "US/Pacific" "Europe/London" "Europe/Berlin" "Europe/Paris" "Europe/Madrid" "Europe/Rome" "Asia/Tokyo" "Asia/Shanghai" "Asia/Seoul" "Asia/Kolkata" "Australia/Sydney" "America/Sao_Paulo")
+    local list_args=()
+    for i in "${!tzones[@]}"; do
+        list_args+=("$i" "${tzones[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select timezone:" 20 60 12 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    local tz="${tzones[$choice]}"
+    set_conf "timezone" "$tz"
+
+    info "Timezone: $tz"
+}
+
+# ── Step 3: Hostname ─────────────────────────────────────────────
+step_hostname() {
+    step "3/24 — Hostname"
+
+    local hostname
+    hostname=$(whiptail --title "$INSTALLER_NAME" --inputbox "Enter hostname:" 10 50 "arch" 3>&1 1>&2 2>&3) || return 0
+
+    [[ -z "$hostname" ]] && hostname="arch"
+    set_conf "hostname" "$hostname"
+
+    info "Hostname: $hostname"
+}
+
+# ── Step 4: User Creation ────────────────────────────────────────
+step_user() {
+    step "4/24 — User Creation"
+
+    local username
+    username=$(whiptail --title "$INSTALLER_NAME" --inputbox "Enter username:" 10 50 "max" 3>&1 1>&2 2>&3) || return 0
+
+    [[ -z "$username" ]] && { warn "Username cannot be empty"; return 1; }
+
+    local userpass
+    userpass=$(whiptail --title "$INSTALLER_NAME" --passwordbox "Enter password for $username:" 10 50 3>&1 1>&2 2>&3) || return 0
+
+    local userpass2
+    userpass2=$(whiptail --title "$INSTALLER_NAME" --passwordbox "Confirm password for $username:" 10 50 3>&1 1>&2 2>&3) || return 0
+
+    [[ "$userpass" != "$userpass2" ]] && { warn "Passwords do not match"; return 1; }
+    [[ -z "$userpass" ]] && { warn "Password cannot be empty"; return 1; }
+
+    set_conf "username" "$username"
+    set_conf "userpass" "$userpass"
+
+    info "User: $username"
+}
+
+# ── Step 5: Root Password ────────────────────────────────────────
+step_rootpw() {
+    step "5/24 — Root Password"
+
+    local rootpw
+    rootpw=$(whiptail --title "$INSTALLER_NAME" --passwordbox "Enter root password:" 10 50 3>&1 1>&2 2>&3) || return 0
+
+    local rootpw2
+    rootpw2=$(whiptail --title "$INSTALLER_NAME" --passwordbox "Confirm root password:" 10 50 3>&1 1>&2 2>&3) || return 0
+
+    [[ "$rootpw" != "$rootpw2" ]] && { warn "Passwords do not match"; return 1; }
+    [[ -z "$rootpw" ]] && { warn "Root password cannot be empty"; return 1; }
+
+    set_conf "rootpw" "$rootpw"
+
+    info "Root password set"
+}
+
+# ── Step 6: Network Configuration ────────────────────────────────
+step_network() {
+    step "6/24 — Network Configuration"
+
+    local methods=("NetworkManager" "systemd-networkd" "iwd")
+    local labels=("NetworkManager (recommended)" "systemd-networkd" "iwd")
+
+    local list_args=()
+    for i in "${!methods[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select network manager:" 15 60 3 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "network_manager" "${methods[$choice]}"
+    info "Network: ${methods[$choice]}"
+}
+
+# ── Step 7: Disk Selection ───────────────────────────────────────
+step_disk() {
+    step "7/24 — Disk Selection"
+
+    info "Detecting disks..."
+
+    local -a disks=()
+    local -a disk_info=()
+
+    while IFS= read -r line; do
+        local name size model fstype mountpoint
+        name=$(echo "$line" | awk '{print $1}')
+        size=$(echo "$line" | awk '{print $2}')
+        model=$(echo "$line" | awk '{print $3}')
+        fstype=$(echo "$line" | awk '{print $4}')
+        mountpoint=$(echo "$line" | awk '{print $5}')
+
+        # Skip loop devices and CD-ROMs
+        [[ "$name" == loop* || "$name" == sr* ]] && continue
+
+        local dev="/dev/$name"
+        [[ -b "$dev" ]] || continue
+
+        # Skip if mounted
+        [[ -n "$mountpoint" ]] && continue
+
+        disks+=("$dev")
+        disk_info+=("$dev  ${size:-?}  ${model:-unknown}  ${fstype:-?}")
+    done < <(lsblk -d -n -o NAME,SIZE,MODEL,FSTYPE,MOUNTPOINTS 2>/dev/null)
+
+    [[ ${#disks[@]} -eq 0 ]] && { warn "No installable disks found"; return 1; }
+
+    # Show disk info
+    echo -e "\n${BOLD}Available Disks:${NC}"
+    echo -e "${DIM}DEVICE   SIZE      MODEL              FS${NC}"
+    for info in "${disk_info[@]}"; do
+        echo -e "  $info"
+    done
+
+    local list_args=()
+    for i in "${!disks[@]}"; do
+        list_args+=("$i" "${disk_info[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select installation disk:" 20 70 10 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    local selected_disk="${disks[$choice]}"
+
+    # Show WARNING
+    local disk_size
+    disk_size=$(lsblk -d -n -o SIZE "$selected_disk" 2>/dev/null || echo "unknown")
+
+    echo -e "\n${RED}${BOLD}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}${BOLD}║              ⚠  WARNING  ⚠                  ║${NC}"
+    echo -e "${RED}${BOLD}╚══════════════════════════════════════════════╝${NC}"
+    echo -e "\n${BOLD}The following disk will be modified:${NC}"
+    echo -e "  Device: ${RED}${selected_disk}${NC}"
+    echo -e "  Size:   ${disk_size}"
+    echo -e ""
+    echo -e "${RED}ALL DATA ON THIS DISK WILL BE DESTROYED.${NC}"
+    echo -e ""
+
+    if ! confirm "I understand all data on $selected_disk will be erased"; then
+        return 1
+    fi
+
+    set_conf "disk" "$selected_disk"
+    info "Selected disk: $selected_disk"
+}
+
+# ── Step 8: Partitioning ─────────────────────────────────────────
+step_partition() {
+    step "8/24 — Partitioning"
+
+    local disk
+    disk=$(get_conf "disk")
+    [[ -z "$disk" ]] && { warn "No disk selected"; return 1; }
+
+    local modes=("auto-uefi" "auto-bios" "manual")
+    local labels=("Auto UEFI (GPT + ESP)" "Auto BIOS (MBR)" "Manual partitioning")
+
+    local list_args=()
+    for i in "${!modes[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Partitioning mode:" 15 60 3 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "partition_mode" "${modes[$choice]}"
+    info "Partitioning: ${modes[$choice]}"
+}
+
+# ── Step 9: Filesystem Selection ─────────────────────────────────
+step_filesystem() {
+    step "9/24 — Filesystem"
+
+    local fss=("ext4" "btrfs" "xfs" "f2fs")
+    local labels=("ext4 (stable, default)" "btrfs (snapshots, compression)" "xfs (performance)" "f2fs (flash-optimized)")
+
+    local list_args=()
+    for i in "${!fss[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select root filesystem:" 15 60 4 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "filesystem" "${fss[$choice]}"
+    info "Filesystem: ${fss[$choice]}"
+}
+
+# ── Step 10: Swap Configuration ──────────────────────────────────
+step_swap() {
+    step "10/24 — Swap"
+
+    local swap_modes=("swapfile" "swap-partition" "zram" "none")
+    local labels=("Swap file (flexible)" "Dedicated swap partition" "ZRAM (compressed, fast)" "No swap")
+
+    local list_args=()
+    for i in "${!swap_modes[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Swap configuration:" 15 60 4 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    local swap_type="${swap_modes[$choice]}"
+    set_conf "swap_type" "$swap_type"
+
+    if [[ "$swap_type" == "swapfile" ]]; then
+        local mem_total
+        mem_total=$(awk '/^MemTotal/ {printf "%.0f", $2/1024}' /proc/meminfo)
+        local swap_size
+        swap_size=$(whiptail --title "$INSTALLER_NAME" --inputbox "Swap file size in MB:" 10 50 "$mem_total" 3>&1 1>&2 2>&3) || return 0
+        set_conf "swap_size" "$swap_size"
+    fi
+
+    info "Swap: $swap_type"
+}
+
+# ── Step 11: Bootloader Installation ─────────────────────────────
+step_bootloader() {
+    step "11/24 — Bootloader"
+
+    local bootloaders=("grub-systemd" "grub" "systemd-boot")
+    local labels=("GRUB (recommended)" "GRUB (non-systemd)" "systemd-boot")
+
+    local list_args=()
+    for i in "${!bootloaders[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select bootloader:" 15 60 3 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "bootloader" "${bootloaders[$choice]}"
+    info "Bootloader: ${bootloaders[$choice]}"
+}
+
+# ── Step 12: Kernel Selection ────────────────────────────────────
+step_kernel() {
+    step "12/24 — Kernel"
+
+    local kernels=("linux" "linux-lts" "linux-zen" "linux-hardened")
+    local labels=("linux (latest)" "linux-lts (long-term support)" "linux-zen (performance)" "linux-hardened (security)")
+
+    local list_args=()
+    for i in "${!kernels[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select kernel:" 15 60 4 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "kernel" "${kernels[$choice]}"
+    info "Kernel: ${kernels[$choice]}"
+}
+
+# ── Step 13: Microcode Selection ─────────────────────────────────
+step_microcode() {
+    step "13/24 — Microcode"
+
+    local options=()
+    local cpu_vendor
+    cpu_vendor=$(lscpu | grep 'Vendor ID' | awk '{print $3}')
+
+    case "$cpu_vendor" in
+        GenuineIntel) options=("intel-ucode" "none") ;;
+        AuthenticAMD) options=("amd-ucode" "none") ;;
+        *) options=("intel-ucode" "amd-ucode" "none") ;;
+    esac
+
+    local labels=()
+    for opt in "${options[@]}"; do
+        case "$opt" in
+            intel-ucode) labels+=("Intel microcode (recommended)") ;;
+            amd-ucode) labels+=("AMD microcode (recommended)") ;;
+            none) labels+=("No microcode") ;;
+        esac
+    done
+
+    local list_args=()
+    for i in "${!options[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select microcode:" 15 60 3 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "microcode" "${options[$choice]}"
+    info "Microcode: ${options[$choice]}"
+}
+
+# ── Step 14: GPU/Graphics Setup ──────────────────────────────────
+step_gpu() {
+    step "14/24 — GPU / Graphics"
+
+    local gpus=()
+    local gpu_labels=()
+
+    # Detect GPU
+    local gpu_list
+    gpu_list=$(lspci 2>/dev/null | grep -iE 'vga|3d|display' || true)
+
+    if echo "$gpu_list" | grep -qi "nvidia"; then
+        gpus+=("nvidia" "nouveau" "modesetting")
+        gpu_labels+=("NVIDIA (proprietary)" "Nouveau (open-source)" "Modesetting (generic)")
+    elif echo "$gpu_list" | grep -qi "amd\|radeon"; then
+        gpus+=("amdgpu" "modesetting")
+        gpu_labels+=("AMDGPU (recommended)" "Modesetting (generic)")
+    elif echo "$gpu_list" | grep -qi "intel"; then
+        gpus+=("intel" "modesetting")
+        gpu_labels+=("Intel (xf86-video-intel)" "Modesetting (generic)")
+    else
+        gpus+=("modesetting" "vesa")
+        gpu_labels+=("Modesetting (generic)" "VESA (fallback)")
+    fi
+
+    gpus+=("none")
+    gpu_labels+=("No graphics driver")
+
+    local list_args=()
+    for i in "${!gpus[@]}"; do
+        list_args+=("$i" "${gpu_labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select GPU driver:" 18 60 8 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "gpu_driver" "${gpus[$choice]}"
+    info "GPU driver: ${gpus[$choice]}"
+}
+
+# ── Step 15: Audio Setup ─────────────────────────────────────────
+step_audio() {
+    step "15/24 — Audio"
+
+    local audios=("pipewire" "pulseaudio" "none")
+    local labels=("PipeWire (modern, recommended)" "PulseAudio (classic)" "No audio server")
+
+    local list_args=()
+    for i in "${!audios[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select audio stack:" 15 60 3 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "audio" "${audios[$choice]}"
+    info "Audio: ${audios[$choice]}"
+}
+
+# ── Step 16: Desktop / Window Manager Selection ──────────────────
+step_desktop() {
+    step "16/24 — Desktop / Window Manager"
+
+    local desktops=("hyprland" "sway" "i3" "gnome" "kde" "xfce" "cinnamon" "mate" "lxqt" "openbox" "bspwm" "dwm" "none")
+    local labels=(
+        "Hyprland (Wayland, tiling)"
+        "Sway (Wayland, i3-compatible)"
+        "i3 (X11, tiling)"
+        "GNOME (Wayland/X11, full DE)"
+        "KDE Plasma (Wayland/X11, full DE)"
+        "XFCE (X11, lightweight DE)"
+        "Cinnamon (X11, traditional DE)"
+        "MATE (X11, classic DE)"
+        "LXQt (X11, ultra-light DE)"
+        "Openbox (X11, minimal WM)"
+        "bspwm (X11, tiling WM)"
+        "dwm (X11, suckless WM)"
+        "No desktop (CLI only)"
+    )
+
+    local list_args=()
+    for i in "${!desktops[@]}"; do
+        list_args+=("$i" "${labels[$i]}")
+    done
+
+    local choice
+    choice=$(whiptail --title "$INSTALLER_NAME" --menu "Select desktop environment:" 24 70 13 "${list_args[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    set_conf "desktop" "${desktops[$choice]}"
+    info "Desktop: ${desktops[$choice]}"
+}
+
+# ── Step 17: Essential Package Selection ──────────────────────────
+step_packages() {
+    step "17/24 — Essential Packages"
+
+    local pkg_categories=(
+        "browsers:Browsers:firefox chromium"
+        "terminal:Terminal Emulators:kitty alacritty foot"
+        "editors:Editors:neovim vim nano"
+        "git:Git + Tools:git"
+        "dev:Development:gcc make cmake"
+        "office:Office:libreoffice-fresh"
+        "media:Media Players:mpv celluloid"
+        "image:Image Tools:gimp inkscape"
+        "archive:Archive Tools:zip unzip unrar"
+        "ssh:SSH:openssh"
+        "shell:Shell Enhancements:bash-completion zsh-completions fish-completions"
+        "utils:Utilities:htop btop tmux fzf ripgrep fd bat eza"
+        "fonts:Fonts:noto-fonts noto-fonts-cjk noto-fonts-emoji"
+        "security:Security:gnupg pass"
+    )
+
+    local selections=()
+    for cat in "${pkg_categories[@]}"; do
+        IFS=':' read -r key label pkgs <<< "$cat"
+        selections+=("$key" "$label" "ON")
+    done
+
+    local choices
+    choices=$(whiptail --title "$INSTALLER_NAME" --checklist "Select package groups to install:" 24 70 14 "${selections[@]}" 3>&1 1>&2 2>&3) || return 0
+
+    # Parse selected categories
+    local selected_pkgs=""
+    for cat in "${pkg_categories[@]}"; do
+        IFS=':' read -r key label pkgs <<< "$cat"
+        if echo "$choices" | grep -q "\"$key\""; then
+            selected_pkgs="$selected_pkgs $pkgs"
+        fi
+    done
+
+    set_conf "extra_packages" "$selected_pkgs"
+    info "Extra packages: $selected_pkgs"
+}
+
+# ── Step 18: Review Before Install ───────────────────────────────
+step_review() {
+    step "18/24 — Review Configuration"
+
+    echo -e "\n${BOLD}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}  INSTALLATION SUMMARY${NC}"
+    echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e ""
+    echo -e "  ${CYAN}Keyboard:${NC}    $(get_conf keyboard_layout)"
+    echo -e "  ${CYAN}Locale:${NC}      $(get_conf locale)"
+    echo -e "  ${CYAN}Timezone:${NC}    $(get_conf timezone)"
+    echo -e "  ${CYAN}Hostname:${NC}    $(get_conf hostname)"
+    echo -e "  ${CYAN}Username:${NC}    $(get_conf username)"
+    echo -e "  ${CYAN}Network:${NC}     $(get_conf network_manager)"
+    echo -e "  ${CYAN}Disk:${NC}        $(get_conf disk)"
+    echo -e "  ${CYAN}Partition:${NC}   $(get_conf partition_mode)"
+    echo -e "  ${CYAN}Filesystem:${NC}  $(get_conf filesystem)"
+    echo -e "  ${CYAN}Swap:${NC}        $(get_conf swap_type)"
+    echo -e "  ${CYAN}Bootloader:${NC}  $(get_conf bootloader)"
+    echo -e "  ${CYAN}Kernel:${NC}      $(get_conf kernel)"
+    echo -e "  ${CYAN}Microcode:${NC}   $(get_conf microcode)"
+    echo -e "  ${CYAN}GPU:${NC}         $(get_conf gpu_driver)"
+    echo -e "  ${CYAN}Audio:${NC}       $(get_conf audio)"
+    echo -e "  ${CYAN}Desktop:${NC}     $(get_conf desktop)"
+    echo -e ""
+    echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
+
+    if ! confirm "Proceed with installation?"; then
+        warn "Installation cancelled by user."
+        return 1
+    fi
+}
+
+# ── Step 19-23: Perform Installation ─────────────────────────────
+perform_install() {
+    step "19/24 — Partitioning Disk"
+
+    local disk partition_mode filesystem swap_type bootloader
+
+    disk=$(get_conf "disk")
+    partition_mode=$(get_conf "partition_mode")
+    filesystem=$(get_conf "filesystem")
+    swap_type=$(get_conf "swap_type")
+    bootloader=$(get_conf "bootloader")
+
+    [[ -z "$disk" ]] && die "No disk selected"
+
+    # Create new partition table
+    info "Creating partition table on $disk..."
+    case "$partition_mode" in
+        auto-uefi)
+            parted -s "$disk" mklabel gpt
+            # ESP partition (512M)
+            parted -s "$disk" mkpart ESP fat32 1MiB 513MiB
+            parted -s "$disk" set 1 esp on
+            # Root partition (rest)
+            parted -s "$disk" mkpart root "$filesystem" 513MiB 100%
+
+            sleep 2
+            # Determine partition names
+            if [[ "$disk" == *nvme* || "$disk" == *mmcblk* ]]; then
+                ESP="${disk}p1"
+                ROOT="${disk}p2"
+            else
+                ESP="${disk}1"
+                ROOT="${disk}2"
+            fi
+            ;;
+        auto-bios)
+            parted -s "$disk" mklabel msdos
+            parted -s "$disk" mkpart primary "$filesystem" 1MiB 513MiB
+            parted -s "$disk" set 1 boot on
+            parted -s "$disk" mkpart primary "$filesystem" 513MiB 100%
+
+            sleep 2
+            if [[ "$disk" == *nvme* || "$disk" == *mmcblk* ]]; then
+                ESP="${disk}p1"
+                ROOT="${disk}p2"
+            else
+                ESP="${disk}1"
+                ROOT="${disk}2"
+            fi
+            ;;
+        manual)
+            die "Manual partitioning not yet supported in this mode. Please partition manually and re-run."
+            ;;
+    esac
+
+    info "Formatting partitions..."
+    mkfs.fat -F32 -n BOOT "$ESP" || die "Failed to format ESP"
+
+    case "$filesystem" in
+        ext4) mkfs.ext4 -L ROOT "$ROOT" || die "Failed to format root" ;;
+        btrfs) mkfs.btrfs -f -L ROOT "$ROOT" || die "Failed to format root" ;;
+        xfs) mkfs.xfs -f -L ROOT "$ROOT" || die "Failed to format root" ;;
+        f2fs) mkfs.f2fs -f -L ROOT "$ROOT" || die "Failed to format root" ;;
+    esac
+
+    # ── Swap ──
+    step "20/24 — Configuring Swap"
+
+    case "$swap_type" in
+        swapfile)
+            # Will create after mounting
+            set_conf "swap_file_path" "/swapfile"
+            ;;
+        zram)
+            info "ZRAM will be configured post-install"
+            ;;
+        none)
+            info "No swap configured"
+            ;;
+    esac
+
+    # ── Mount ──
+    step "21/24 — Mounting Filesystems"
+
+    info "Mounting root..."
+    mount "$ROOT" /mnt || die "Failed to mount root"
+
+    info "Mounting ESP..."
+    mkdir -p /mnt/boot
+    mount "$ESP" /mnt/boot || die "Failed to mount ESP"
+
+    if [[ "$swap_type" == "swapfile" ]]; then
+        local swap_size
+        swap_size=$(get_conf "swap_size")
+        info "Creating swap file (${swap_size}M)..."
+        dd if=/dev/zero of=/mnt/swapfile bs=1M count="${swap_size:-2048}" status=progress
+        chmod 600 /mnt/swapfile
+        mkswap /mnt/swapfile || die "Failed to create swap"
+    fi
+
+    # ── Pacstrap ──
+    step "22/24 — Installing Base System"
+
+    local kernel
+    kernel=$(get_conf "kernel")
+    local microcode
+    microcode=$(get_conf "microcode")
+
+    local base_pkgs="base $kernel $kernel-headers"
+    [[ "$microcode" != "none" ]] && base_pkgs="$base_pkgs $microcode"
+    base_pkgs="$base_pkgs linux-firmware nano sudo git networkmanager grub"
+
+    info "Running pacstrap..."
+    pacstrap /mnt $base_pkgs || die "pacstrap failed"
+
+    # ── Fstab ──
+    step "23/24 — Generating fstab"
+
+    info "Generating fstab..."
+    genfstab -U /mnt >> /mnt/etc/fstab
+
+    if [[ "$swap_type" == "swapfile" ]]; then
+        echo "/swapfile none swap defaults 0 0" >> /mnt/etc/fstab
+    fi
+
+    # ── Configure Installed System ──
+    step "24/24 — Configuring System"
+
+    # Write configuration to chroot script
+    cat > /mnt/tmp/arch-install-config.sh << 'CONFSCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONF="/tmp/arch-install.conf"
+conf_get() { grep "^${1}=" "$CONF" 2>/dev/null | cut -d= -f2- || echo ""; }
+
+# Timezone
+ln -sf "/usr/share/zoneinfo/$(conf_get timezone)" /etc/localtime
+hwclock --systohc
+
+# Locale
+echo "$(conf_get locale)" > /etc/locale.conf
+echo "$(conf_get locale) UTF-8" > /etc/locale.gen
+locale-gen
+
+# Hostname
+echo "$(conf_get hostname)" > /etc/hostname
+
+# Hosts
+cat > /etc/hosts << EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $(conf_get hostname)
+EOF
+
+# Keyboard
+mkdir -p /etc/keyboard.d
+echo "KEYMAP=$(conf_get keyboard_layout)" > /etc/vconsole.conf
+
+# User
+useradd -m -G wheel -s /bin/bash "$(conf_get username)"
+echo "$(conf_get username):$(conf_get userpass)" | chpasswd
+echo "root:$(conf_get rootpw)" | chpasswd
+
+# Sudo
+sed -i 's/^#\s*\(%wheel\s.*ALL=(ALL:ALL) ALL\)/\1/' /etc/sudoers
+
+# Network
+case "$(conf_get network_manager)" in
+    NetworkManager) systemctl enable NetworkManager ;;
+    systemd-networkd) systemctl enable systemd-networkd systemd-resolved ;;
+    iwd) systemctl enable iwd ;;
+esac
+
+# Initramfs
+mkinitcpio -P
+
+# Bootloader
+case "$(conf_get bootloader)" in
+    grub*)
+        grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+        grub-install --target=i386-pc --recheck "$(conf_get disk)" 2>/dev/null || true
+        grub-mkconfig -o /boot/grub/grub.cfg
+        ;;
+    systemd-boot)
+        bootctl install
+        ;;
+esac
+
+# Microcode in GRUB
+if [[ "$(conf_get bootloader)" == grub* ]]; then
+    # Re-generate grub with microcode
+    grub-mkconfig -o /boot/grub/grub.cfg
+fi
+
+echo "System configuration complete."
+CONFSCRIPT
+
+    # Copy config into chroot
+    cp "$CONF_FILE" /mnt/tmp/arch-install.conf
+    chmod +x /mnt/tmp/arch-install-config.sh
+
+    # Run configuration
+    arch-chroot /mnt /tmp/arch-install-config.sh || die "System configuration failed"
+
+    # Swap
+    if [[ "$swap_type" == "swapfile" ]]; then
+        arch-chroot /mnt swapon /swapfile 2>/dev/null || true
+    fi
+
+    # Cleanup
+    rm -f /mnt/tmp/arch-install-config.sh
+    rm -f /mnt/tmp/arch-install.conf
+
+    # ── Done ──
+    echo ""
+    echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}${BOLD}║         ✅ INSTALLATION COMPLETE             ║${NC}"
+    echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  System installed to: ${BOLD}$(get_conf disk)${NC}"
+    echo -e "  Username: ${BOLD}$(get_conf username)${NC}"
+    echo -e "  Desktop: ${BOLD}$(get_conf desktop)${NC}"
+    echo ""
+    echo -e "  ${DIM}Log: $LOGFILE${NC}"
+
+    if whiptail --title "$INSTALLER_NAME" --yesno "Installation complete!\n\nReboot now?" 10 50; then
+        umount -R /mnt 2>/dev/null || true
+        reboot
+    else
+        info "You may reboot when ready with: reboot"
+    fi
+}
+
+# ── Main ──────────────────────────────────────────────────────────
+main() {
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo "╔══════════════════════════════════════════════╗"
+    echo "║         Arch Custom Installer v${INSTALLER_VERSION}          ║"
+    echo "║         Minimal • Fast • Safe                ║"
+    echo "╚══════════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    # Create work directory
+    mkdir -p "$WORK_DIR"
+    : > "$CONF_FILE"
+
+    # Steps 0-17: Configuration
+    step_keyboard   || return 0
+    step_locale     || return 0
+    step_timezone   || return 0
+    step_hostname   || return 0
+    step_user       || return 0
+    step_rootpw     || return 0
+    step_network    || return 0
+    step_disk       || return 0
+    step_partition  || return 0
+    step_filesystem || return 0
+    step_swap       || return 0
+    step_bootloader || return 0
+    step_kernel     || return 0
+    step_microcode  || return 0
+    step_gpu        || return 0
+    step_audio      || return 0
+    step_desktop    || return 0
+    step_packages   || return 0
+
+    # Step 18: Review
+    step_review || return 0
+
+    # Steps 19-24: Perform installation
+    perform_install
+}
+
+main "$@"

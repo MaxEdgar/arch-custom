@@ -1,0 +1,193 @@
+# ═══════════════════════════════════════════════════════════════════
+# Arch Custom ISO — Package Selection
+# Minimal, fast, responsive Arch Linux live environment
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Core ──────────────────────────────────────────────────────────
+base
+linux
+linux-firmware
+linux-headers
+firmware
+mkinitcpio
+systemd
+systemd-sysvcompat
+udev
+kmod
+
+# ── Boot ──────────────────────────────────────────────────────────
+grub
+syslinux
+syslinux-efi
+mtools
+dosfstools
+ldnntp
+
+# ── Filesystem / Storage ──────────────────────────────────────────
+e2fsprogs
+btrfs-progs
+xfsprogs
+f2fs-tools
+ntfs-3g
+dosfstools
+lvm2
+mdadm
+cryptsetup
+device-mapper
+parted
+gptfdisk
+util-linux
+coreutils
+findutils
+grep
+sed
+tar
+gzip
+xz
+zstd
+
+# ── Networking ────────────────────────────────────────────────────
+networkmanager
+network-manager-applet
+wpa_supplicant
+iw
+iwd
+wireless_tools
+openvpn
+wireguard-tools
+curl
+wget
+openssh
+rsync
+net-tools
+iproute2
+iputils
+dhcp
+bind
+# nftables or iptables-nft for firewall
+nftables
+avahi
+
+# ── Shell / CLI ───────────────────────────────────────────────────
+bash
+bash-completion
+zsh
+fish
+fish-completion
+zsh-completions
+coreutils
+procps-ng
+which
+tree
+ripgrep
+fd
+fzf
+bat
+eza
+starship
+fastfetch
+man-db
+man-pages
+
+# ── Editor ────────────────────────────────────────────────────────
+nano
+vim
+neovim
+
+# ── Hardware Detection ────────────────────────────────────────────
+hwinfo
+lscpu
+pciutils
+usbutils
+lsusb
+lsscsi
+hdparm
+smartmontools
+lm_sensors
+ethtool
+dmidecode
+inxi
+
+# ── CPU / Microcode ───────────────────────────────────────────────
+intel-ucode
+amd-ucode
+
+# ── GPU / Graphics ────────────────────────────────────────────────
+mesa
+lib32-mesa
+vulkan-icd-loader
+lib32-vulkan-icd-loader
+vulkan-tools
+libva-mesa-driver
+mesa-vdpau
+xf86-video-amdgpu
+xf86-video-ati
+xf86-video-nouveau
+xf86-video-intel
+xf86-video-vesa
+
+# ── Wayland / Display ─────────────────────────────────────────────
+wayland
+xorg-xwayland
+xorg-xrandr
+xorg-xset
+xdg-utils
+xdg-user-dirs
+polkit
+seatd
+
+# ── Audio ─────────────────────────────────────────────────────────
+pipewire
+pipewire-alsa
+pipewire-pulse
+pipewire-jack
+wireplumber
+alsa-utils
+alsa-firmware
+sof-firmware
+# PulseAudio compatibility layer
+pulseaudio
+
+# ── Fonts ─────────────────────────────────────────────────────────
+fontconfig
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+ttf-dejavu
+ttf-liberation
+
+# ── TUI / Installer deps ──────────────────────────────────────────
+whiptail
+dialog
+gum
+ansi
+
+# ── Base-devel (for AUR support) ──────────────────────────────────
+base-devel
+sudo
+
+# ── Console / Terminal ────────────────────────────────────────────
+kitty
+alacritty
+foot
+
+# ── Misc essentials ───────────────────────────────────────────────
+git
+pacman-contrib
+reflector
+rsync
+rsync
+haveged
+cronie
+logrotate
+ less
+which
+file
+unzip
+zip
+patch
+diffutils
+fakeroot
+make
+gcc
+binutils

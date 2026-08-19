@@ -1,0 +1,12 @@
+[Unit]
+Description=Arch Custom Live Environment Init
+After=multi-user.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/arch-custom/init-live.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

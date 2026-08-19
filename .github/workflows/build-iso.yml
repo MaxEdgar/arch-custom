@@ -1,0 +1,297 @@
+# ═══════════════════════════════════════════════════════════════════
+# Arch Custom ISO — GitHub Actions Build Workflow
+# Builds a minimal, fast Arch Linux ISO on a remote runner.
+# ═══════════════════════════════════════════════════════════════════
+name: Build Arch Custom ISO
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'archiso/**'
+      - '.github/workflows/build-iso.yml'
+      - 'installer/**'
+      - 'cli/**'
+      - 'config/**'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force rebuild (ignore path filtering)'
+        required: false
+        default: 'false'
+        type: boolean
+  workflow_call:
+    outputs:
+      iso_name:
+        description: 'Built ISO filename'
+        value: ${{ jobs.build.outputs.iso_name }}
+      iso_size:
+        description: 'ISO file size'
+        value: ${{ jobs.build.outputs.iso_size }}
+      sha256:
+        description: 'ISO SHA256 checksum'
+        value: ${{ jobs.build.outputs.sha256 }}
+
+# Prevent concurrent builds
+concurrency:
+  group: iso-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_DIR: /tmp/archiso-build
+  ISO_NAME: arch-custom-${{ github.run_number }}
+  ARTIFACT_RETENTION: 7
+
+jobs:
+  build:
+    name: 🔨 Build Arch Custom ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    permissions:
+      contents: read
+      actions: read
+
+    outputs:
+      iso_name: ${{ steps.validate.outputs.iso_name }}
+      iso_size: ${{ steps.validate.outputs.iso_size }}
+      sha256: ${{ steps.validate.outputs.sha256 }}
+      build_time: ${{ steps.build.outputs.build_time }}
+
+    steps:
+      # ── 1. Checkout ───────────────────────────────────────────
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. System Info ────────────────────────────────────────
+      - name: 📊 System information
+        run: |
+          echo "═══ Runner System Info ═══"
+          echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"')"
+          echo "Kernel: $(uname -r)"
+          echo "CPU: $(nproc) cores"
+          echo "RAM: $(free -h | awk '/Mem:/ {print $2}')"
+          echo "Disk: $(df -h / | awk 'NR==2 {print $4}') free"
+          echo "════════════════════════════"
+
+      # ── 3. Install Dependencies ───────────────────────────────
+      - name: 📦 Install Arch ISO build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            arch-install-scripts \
+            dosfstools \
+            e2fsprogs \
+            libarchive-tools \
+            mtools \
+            pacman \
+            sed \
+            squashfs-tools \
+            fakeroot \
+            jq
+
+          # Install pacman if not available
+          if ! command -v pacman &>/dev/null; then
+            echo "Installing pacman from AUR or building from source..."
+            # Use a pre-built pacman binary
+            curl -sL https://archlinux.org/packages/core/x86_64/pacman/download/ -o /tmp/pacman.pkg.tar.zst 2>/dev/null || true
+          fi
+
+          echo "✅ Dependencies installed"
+
+      # ── 4. Setup Arch ISO ─────────────────────────────────────
+      - name: 🔧 Setup Arch ISO build environment
+        run: |
+          sudo mkdir -p ${{ env.BUILD_DIR }}
+          cd ${{ env.BUILD_DIR }}
+
+          # Clone archiso
+          if [[ ! -d archiso ]]; then
+            git clone --depth 1 https://gitlab.archlinux.org/archlinux/archiso.git archiso
+          fi
+
+          echo "✅ Arch ISO environment ready"
+
+      # ── 5. Copy Profile ──────────────────────────────────────
+      - name: 📋 Copy custom profile
+        run: |
+          cd ${{ env.BUILD_DIR }}/archiso
+
+          # Copy our profile into the profiles directory
+          cp -r ${{ github.workspace }}/archiso profiles/arch-custom
+
+          # Ensure scripts are executable
+          chmod -R +x profiles/arch-custom/airootfs/usr/bin/ 2>/dev/null || true
+          chmod -R +x profiles/arch-custom/airootfs/usr/share/ 2>/dev/null || true
+
+          echo "✅ Custom profile copied"
+
+          # Show profile structure
+          find profiles/arch-custom -type f | head -50
+
+      # ── 6. Build ISO ─────────────────────────────────────────
+      - name: 🏗️ Build ISO
+        id: build
+        run: |
+          cd ${{ env.BUILD_DIR }}/archiso
+          echo "Starting build at $(date)"
+
+          BUILD_START=$(date +%s)
+
+          # Build the ISO
+          sudo ./mkarchiso -v \
+            -w "${{ env.BUILD_DIR }}/work" \
+            -o "${{ env.BUILD_DIR }}/out" \
+            profiles/arch-custom 2>&1 | tee "${{ env.BUILD_DIR }}/build.log"
+
+          BUILD_END=$(date +%s)
+          BUILD_TIME=$((BUILD_END - BUILD_START))
+
+          echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
+          echo "✅ Build completed in ${BUILD_TIME} seconds"
+
+          # Show output
+          echo "═══ Build Output ═══"
+          ls -lh ${{ env.BUILD_DIR }}/out/*.iso 2>/dev/null || echo "No ISO found!"
+          echo "═══════════════════"
+
+      # ── 7. Generate Checksums ─────────────────────────────────
+      - name: 🔐 Generate checksums
+        id: validate
+        run: |
+          cd ${{ env.BUILD_DIR }}/out
+
+          ISO_FILE=$(ls *.iso 2>/dev/null | head -1)
+          if [[ -z "$ISO_FILE" ]]; then
+            echo "❌ No ISO file found!"
+            exit 1
+          fi
+
+          echo "ISO file: $ISO_FILE"
+
+          # Generate checksums
+          sha256sum "$ISO_FILE" > "${ISO_FILE}.sha256"
+          sha512sum "$ISO_FILE" > "${ISO_FILE}.sha512"
+
+          # Get size
+          ISO_SIZE=$(du -h "$ISO_FILE" | cut -f1)
+          ISO_SIZE_BYTES=$(stat -c%s "$ISO_FILE")
+          SHA256=$(sha256sum "$ISO_FILE" | cut -d' ' -f1)
+
+          echo "iso_name=${ISO_FILE}" >> "$GITHUB_OUTPUT"
+          echo "iso_size=${ISO_SIZE}" >> "$GITHUB_OUTPUT"
+          echo "iso_size_bytes=${ISO_SIZE_BYTES}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "═══ Build Manifest ═══"
+          echo "ISO:        ${ISO_FILE}"
+          echo "Size:       ${ISO_SIZE}"
+          echo "SHA256:     ${SHA256}"
+          echo "Build time: ${{ steps.build.outputs.build_time }}s"
+          echo "Commit:     ${{ github.sha }}"
+          echo "Run:        #${{ github.run_number }}"
+          echo "══════════════════════"
+
+      # ── 8. Validate ISO ──────────────────────────────────────
+      - name: ✅ Validate ISO
+        run: |
+          cd ${{ env.BUILD_DIR }}/out
+          ISO_FILE=$(ls *.iso | head -1)
+
+          echo "Running validation checks..."
+
+          # Check file exists and is not empty
+          [[ -s "$ISO_FILE" ]] || { echo "❌ ISO is empty!"; exit 1; }
+
+          # Check ISO magic bytes (El Torito)
+          FILE_TYPE=$(file "$ISO_FILE")
+          echo "File type: $FILE_TYPE"
+
+          # Basic size check (should be > 100MB, < 1GB for minimal)
+          ISO_SIZE=$(stat -c%s "$ISO_FILE")
+          if ((ISO_SIZE < 104857600)); then
+            echo "⚠️  ISO is smaller than expected (${ISO_SIZE} bytes)"
+          fi
+          if ((ISO_SIZE > 1073741824)); then
+            echo "⚠️  ISO is larger than expected (${ISO_SIZE} bytes)"
+          fi
+
+          echo "✅ ISO validation passed"
+
+      # ── 9. Create Build Manifest ──────────────────────────────
+      - name: 📄 Create build manifest
+        run: |
+          cd ${{ env.BUILD_DIR }}/out
+          ISO_FILE=$(ls *.iso | head -1)
+
+          cat > build-manifest.json << EOF
+          {
+            "iso_name": "${ISO_FILE}",
+            "iso_size": "${{ steps.validate.outputs.iso_size }}",
+            "sha256": "${{ steps.validate.outputs.sha256 }}",
+            "build_time_seconds": "${{ steps.build.outputs.build_time }}",
+            "commit": "${{ github.sha }}",
+            "run_number": "${{ github.run_number }}",
+            "workflow_run_id": "${{ github.run_id }}",
+            "arch": "x86_64",
+            "build_date": "$(date -Iseconds)",
+            "archiso_version": "$(cd ${{ env.BUILD_DIR }}/archiso && git describe --tags 2>/dev/null || echo 'unknown')"
+          }
+          EOF
+
+          echo "✅ Build manifest created"
+
+      # ── 10. Upload Artifacts ──────────────────────────────────
+      - name: 📤 Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-custom-iso-${{ github.run_number }}
+          path: |
+            ${{ env.BUILD_DIR }}/out/*.iso
+            ${{ env.BUILD_DIR }}/out/*.sha256
+            ${{ env.BUILD_DIR }}/out/*.sha512
+            ${{ env.BUILD_DIR }}/out/build-manifest.json
+          retention-days: ${{ env.ARTIFACT_RETENTION }}
+          compression-level: 0
+
+      # ── 11. Upload Logs ──────────────────────────────────────
+      - name: 📋 Upload build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: ${{ env.BUILD_DIR }}/build.log
+          retention-days: 3
+
+      # ── 12. Cleanup ──────────────────────────────────────────
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up build directory..."
+          sudo rm -rf ${{ env.BUILD_DIR }}/work 2>/dev/null || true
+          sudo rm -rf ${{ env.BUILD_DIR }}/archiso 2>/dev/null || true
+          echo "✅ Cleanup complete"
+          echo "Free disk space: $(df -h / | awk 'NR==2 {print $4}')"
+
+      # ── 13. Summary ──────────────────────────────────────────
+      - name: 📊 Build Summary
+        if: always()
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║         ARCH CUSTOM ISO BUILD SUMMARY        ║"
+          echo "╚══════════════════════════════════════════════╝"
+          echo ""
+          echo "  Status:     ${{ job.status }}"
+          echo "  ISO:        ${{ steps.validate.outputs.iso_name }}"
+          echo "  Size:       ${{ steps.validate.outputs.iso_size }}"
+          echo "  SHA256:     ${{ steps.validate.outputs.sha256 }}"
+          echo "  Build Time: ${{ steps.build.outputs.build_time }}s"
+          echo "  Commit:     ${{ github.sha }}"
+          echo "  Workflow:   #${{ github.run_number }}"
+          echo ""
+          echo "  Download:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""

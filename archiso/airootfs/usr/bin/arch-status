@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# Arch Custom — Lightweight System Status Display
+# Fast, keyboard-friendly, minimal overhead.
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Colors ────────────────────────────────────────────────────────
+BOLD='\033[1m'
+DIM='\033[2m'
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# ── Config ────────────────────────────────────────────────────────
+BAR_WIDTH=10
+
+# ── Helpers ───────────────────────────────────────────────────────
+draw_bar() {
+    local percent=$1
+    local width=${2:-$BAR_WIDTH}
+    local filled=$((percent * width / 100))
+    local empty=$((width - filled))
+
+    local color="$GREEN"
+    ((percent > 70)) && color="$YELLOW"
+    ((percent > 90)) && color="$RED"
+
+    printf "${color}"
+    printf '█%.0s' $(seq 1 $filled 2>/dev/null) || true
+    printf "${DIM}"
+    printf '░%.0s' $(seq 1 $empty 2>/dev/null) || true
+    printf "${NC}"
+}
+
+# ── Battery ───────────────────────────────────────────────────────
+show_battery() {
+    local bat_path="/sys/class/power_supply/BAT0"
+    [[ ! -d "$bat_path" ]] && bat_path="/sys/class/power_supply/BAT1"
+    [[ ! -d "$bat_path" ]] && return 0
+
+    local capacity status
+    capacity=$(cat "$bat_path/capacity" 2>/dev/null || echo "?")
+    status=$(cat "$bat_path/status" 2>/dev/null || echo "")
+
+    [[ "$capacity" == "?" ]] && return 0
+
+    local bat_color="$GREEN"
+    ((capacity < 30)) && bat_color="$YELLOW"
+    ((capacity < 15)) && bat_color="$RED"
+
+    local icon="⚡"
+    [[ "$status" == "Discharging" ]] && icon="🔋"
+    [[ "$status" == "Charging" ]] && icon="⚡"
+
+    printf "  ${MAGENTA}BAT${NC}  ${icon} "
+    draw_bar "$capacity" 8
+    printf " ${bat_color}%s%%${NC}" "$capacity"
+    [[ -n "$status" && "$status" != "Full" ]] && printf " ${DIM}(%s)${NC}" "$status"
+    echo ""
+}
+
+# ── Wi-Fi ─────────────────────────────────────────────────────────
+show_wifi() {
+    local ssid="" signal="" connected=false
+
+    # Try iw
+    if command -v iw &>/dev/null; then
+        local iw_out
+        iw_out=$(iw dev wlan0 link 2>/dev/null || true)
+        if echo "$iw_out" | grep -q "SSID:"; then
+            ssid=$(echo "$iw_out" | grep "SSID:" | awk '{print $2}')
+            signal=$(echo "$iw_out" | grep "signal:" | awk '{print $2}' | tr -d '-' | cut -d. -f1)
+            connected=true
+        fi
+    fi
+
+    # Try NetworkManager
+    if ! $connected && command -v nmcli &>/dev/null; then
+        local nm_out
+        nm_out=$(nmcli -t -f SSID,SIGNAL,TYPE dev wifi 2>/dev/null | head -1 || true)
+        if [[ -n "$nm_out" ]]; then
+            IFS=: read -r ssid signal _ <<< "$nm_out"
+            connected=true
+        fi
+    fi
+
+    # Try wpa_cli
+    if ! $connected && command -v wpa_cli &>/dev/null; then
+        local wpa_out
+        wpa_out=$(wpa_cli status 2>/dev/null || true)
+        if echo "$wpa_out" | grep -q "wpa_state=COMPLETED"; then
+            ssid=$(echo "$wpa_out" | grep "ssid=" | cut -d= -f2)
+            connected=true
+        fi
+    fi
+
+    if $connected && [[ -n "$ssid" ]]; then
+        signal="${signal:-0}"
+        local sig_color="$GREEN"
+        ((signal < 50)) && sig_color="$YELLOW"
+        ((signal < 25)) && sig_color="$RED"
+
+        printf "  ${CYAN}WIFI${NC} ${sig_color}${ssid}${NC}\n"
+        printf "       "
+        draw_bar "$signal"
+        printf " ${sig_color}%s%%${NC}\n" "$signal"
+    else
+        printf "  ${CYAN}WIFI${NC} ${DIM}Disconnected${NC}\n"
+    fi
+}
+
+# ── CPU ───────────────────────────────────────────────────────────
+show_cpu() {
+    local usage
+    usage=$(awk '/^cpu / {total=0; for(i=2;i<=NF;i++) total+=$i; idle=$5; printf "%.0f", (total-idle)*100/total}' /proc/stat 2>/dev/null || echo "?")
+
+    local cpu_color="$GREEN"
+    ((usage > 50)) && cpu_color="$YELLOW"
+    ((usage > 80)) && cpu_color="$RED"
+
+    printf "  ${BLUE}CPU${NC}  ${cpu_color}%s%%${NC}" "$usage"
+
+    # Temperature (cheap to read)
+    if [[ -f /sys/class/thermal/thermal_zone0/temp ]]; then
+        local temp_raw
+        temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo "0")
+        local temp=$((temp_raw / 1000))
+
+        local temp_color="$GREEN"
+        ((temp > 70)) && temp_color="$YELLOW"
+        ((temp > 85)) && temp_color="$RED"
+
+        printf "  ${DIM}│${NC}  ${temp_color}%s°C${NC}" "$temp"
+    fi
+
+    echo ""
+}
+
+# ── RAM ───────────────────────────────────────────────────────────
+show_ram() {
+    local total used
+    read -r total used _ <<< "$(awk '/^MemTotal/ {t=$2} /^MemAvailable/ {a=$2} END {printf "%.1f %.1f", t/1048576, (t-a)/1048576}' /proc/meminfo 2>/dev/null)"
+
+    [[ -z "$total" || -z "$used" ]] && return 0
+
+    local pct
+    pct=$(awk "BEGIN {printf \"%.0f\", ($used/$total)*100}")
+
+    local ram_color="$GREEN"
+    ((pct > 50)) && ram_color="$YELLOW"
+    ((pct > 80)) && ram_color="$RED"
+
+    printf "  ${GREEN}RAM${NC}  ${ram_color}%sG${NC} ${DIM}/${NC} %sG" "$used" "$total"
+    echo ""
+}
+
+# ── Disk ──────────────────────────────────────────────────────────
+show_disk() {
+    local disk_usage
+    disk_usage=$(df -h / 2>/dev/null | awk 'NR==2 {print $5}' | tr -d '%')
+
+    [[ -z "$disk_usage" ]] && return 0
+
+    local disk_color="$GREEN"
+    ((disk_usage > 70)) && disk_color="$YELLOW"
+    ((disk_usage > 90)) && disk_color="$RED"
+
+    local disk_size disk_used
+    disk_size=$(df -h / 2>/dev/null | awk 'NR==2 {print $2}')
+    disk_used=$(df -h / 2>/dev/null | awk 'NR==2 {print $3}')
+
+    printf "  ${YELLOW}DISK${NC} "
+    draw_bar "$disk_usage"
+    printf " ${disk_color}%s%%${NC} ${DIM}(%s/%s)${NC}" "$disk_usage" "$disk_used" "$disk_size"
+    echo ""
+}
+
+# ── Network I/O ───────────────────────────────────────────────────
+show_network_io() {
+    local rx=0 tx=0
+
+    # Get cumulative bytes from all interfaces (excluding lo)
+    while read -r iface bytes; do
+        [[ "$iface" == "lo" ]] && continue
+        rx=$((rx + bytes))
+    done < <(awk 'NR>2 && $1!~/lo:/ {gsub(/:/, "", $1); print $1, $2}' /proc/net/dev 2>/dev/null)
+
+    while read -r iface bytes; do
+        [[ "$iface" == "lo" ]] && continue
+        tx=$((tx + bytes))
+    done < <(awk 'NR>2 && $1!~/lo:/ {gsub(/:/, "", $1); print $1, $10}' /proc/net/dev 2>/dev/null)
+
+    printf "  ${MAGENTA}NET${NC}  ${GREEN}▲%s${NC} ${RED}▼%s${NC}" \
+        "$(numfmt --to=iec $rx 2>/dev/null || echo "${rx}B")" \
+        "$(numfmt --to=iec $tx 2>/dev/null || echo "${tx}B")"
+    echo ""
+}
+
+# ── Uptime ────────────────────────────────────────────────────────
+show_uptime() {
+    local uptime_str
+    uptime_str=$(uptime -p 2>/dev/null | sed 's/^up //' || echo "?")
+    printf "  ${DIM}UP   %s${NC}\n" "$uptime_str"
+}
+
+# ── Full Status Display ───────────────────────────────────────────
+show_status() {
+    local width=60
+
+    # Top border
+    printf "${CYAN}┌─"
+    printf '─%.0s' $(seq 1 $((width-2)))
+    printf "┐${NC}\n"
+
+    # CPU line
+    printf "${CYAN}│${NC}"
+    show_cpu
+    printf "${CYAN}│${NC}"
+
+    # RAM line
+    show_ram
+    printf "${CYAN}│${NC}"
+
+    # Wi-Fi line
+    show_wifi
+    printf "${CYAN}│${NC}"
+
+    # Battery (only if present)
+    show_battery
+    printf "${CYAN}│${NC}"
+
+    # Disk
+    show_disk
+    printf "${CYAN}│${NC}"
+
+    # Network I/O
+    show_network_io
+    printf "${CYAN}│${NC}"
+
+    # Uptime
+    show_uptime
+
+    # Bottom border
+    printf "${CYAN}└─"
+    printf '─%.0s' $(seq 1 $((width-2)))
+    printf "┘${NC}\n"
+}
+
+# ── Main ──────────────────────────────────────────────────────────
+case "${1:-}" in
+    --full|-f)   show_status ;;
+    --cpu|-c)    show_cpu ;;
+    --ram|-r)    show_ram ;;
+    --wifi|-w)   show_wifi ;;
+    --bat|-b)    show_battery ;;
+    --disk|-d)   show_disk ;;
+    --net|-n)    show_network_io ;;
+    --help|-h)
+        echo "arch-status — System status display"
+        echo ""
+        echo "Usage: arch-status [option]"
+        echo ""
+        echo "Options:"
+        echo "  (none)     Show full status"
+        echo "  --full     Show full status"
+        echo "  --cpu      CPU usage only"
+        echo "  --ram      RAM usage only"
+        echo "  --wifi     Wi-Fi status only"
+        echo "  --bat      Battery status only"
+        echo "  --disk     Disk usage only"
+        echo "  --net      Network I/O only"
+        echo "  --help     Show this help"
+        ;;
+    *) show_status ;;
+esac

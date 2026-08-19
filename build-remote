@@ -1,0 +1,558 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# build-remote — Arch Custom ISO Remote Build Controller
+# Manages ISO builds via GitHub Actions from a local machine.
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+# ── Constants ─────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_NAME="arch-custom"
+POLL_INTERVAL=15
+MAX_POLL_ATTEMPTS=360  # 360 * 15s = 90 minutes
+ARTIFACT_DIR="$SCRIPT_DIR/artifacts"
+
+# ── Colors ────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ── Helpers ───────────────────────────────────────────────────────
+info()    { echo -e "${GREEN}→${NC} $*"; }
+warn()    { echo -e "${YELLOW}!${NC} $*"; }
+error()   { echo -e "${RED}✗${NC} $*"; }
+step()    { echo -e "\n${CYAN}═══ $* ═══${NC}"; }
+
+die() {
+    error "$*"
+    exit 1
+}
+
+check_deps() {
+    local missing=()
+    for dep in git gh jq; do
+        command -v "$dep" &>/dev/null || missing+=("$dep")
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        die "Missing dependencies: ${missing[*]}. Please install them."
+    fi
+}
+
+check_auth() {
+    if ! gh auth status &>/dev/null 2>&1; then
+        die "GitHub CLI not authenticated. Run: gh auth login"
+    fi
+}
+
+get_repo_info() {
+    REPO_FULL=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || echo "")
+    if [[ -z "$REPO_FULL" ]]; then
+        # Try to detect from git remote
+        local remote_url
+        remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+        if [[ -n "$remote_url" ]]; then
+            REPO_FULL=$(echo "$remote_url" | sed 's|.*github.com[:/]||; s|\.git$||')
+        fi
+    fi
+    [[ -z "$REPO_FULL" ]] && die "Cannot determine repository. Run this from the project root."
+}
+
+get_disk_space() {
+    echo -e "\n${DIM}$(df -h / | awk 'NR==2 {printf "Disk: %s free / %s total (%s used)", $4, $2, $5}')${NC}"
+}
+
+format_duration() {
+    local seconds=$1
+    printf "%02d:%02d" $((seconds / 60)) $((seconds % 60))
+}
+
+# ── 1. Check Environment ────────────────────────────────────────
+cmd_status() {
+    step "1/15 — Checking Local Environment"
+
+    check_deps
+    check_auth
+    get_repo_info
+
+    echo -e "  ${BOLD}Repository:${NC} $REPO_FULL"
+
+    # Check if repo exists
+    if ! gh repo view "$REPO_FULL" &>/dev/null 2>&1; then
+        warn "Repository $REPO_FULL not found on GitHub"
+        echo -e "  Run ${BOLD}./build-remote init${NC} to create it."
+        return 1
+    fi
+
+    # Get latest workflow run
+    local runs
+    runs=$(gh run list --repo "$REPO_FULL" --workflow build-iso.yml --limit 5 --json databaseId,conclusion,createdAt,status 2>/dev/null || echo "[]")
+
+    if [[ "$runs" == "[]" ]]; then
+        info "No builds found yet."
+        echo -e "  Run ${BOLD}./build-remote build${NC} to start one."
+        return 0
+    fi
+
+    echo -e "\n${BOLD}Recent Builds:${NC}"
+    echo -e "${DIM}RUN   STATUS       DATE${NC}"
+
+    echo "$runs" | jq -r '.[] | "\(.databaseId)  \(.status)/\(.conclusion // "pending")  \(.createdAt)"' 2>/dev/null | \
+        head -5 | while read -r line; do
+            echo "  $line"
+        done
+
+    get_disk_space
+}
+
+# ── 2. Initialize Repository ────────────────────────────────────
+cmd_init() {
+    step "Initializing Repository"
+
+    check_deps
+    check_auth
+
+    local remote_url
+    remote_url=$(git remote get-url origin 2>/dev/null || echo "")
+
+    if [[ -z "$remote_url" ]]; then
+        info "No git remote configured."
+        echo ""
+        read -rp "GitHub repository name (e.g., username/arch-custom): " repo_name
+        [[ -z "$repo_name" ]] && die "Repository name required."
+
+        info "Creating repository: $repo_name"
+        gh repo create "$repo_name" --public --description "Custom Arch Linux ISO — Minimal, Fast, Secure" || die "Failed to create repository"
+
+        git remote add origin "https://github.com/$repo_name.git" 2>/dev/null || true
+        REPO_FULL="$repo_name"
+    else
+        REPO_FULL=$(echo "$remote_url" | sed 's|.*github.com[:/]||; s|\.git$||')
+        info "Using existing repository: $REPO_FULL"
+    fi
+
+    # Create .gitignore if not exists
+    if [[ ! -f .gitignore ]]; then
+        cat > .gitignore << 'EOF'
+# Build artifacts
+*.iso
+*.sha256
+*.sha512
+artifacts/
+build/
+work/
+out/
+*.tar.zst
+
+# Logs
+*.log
+build.log
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Package caches
+/var/cache/
+node_modules/
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+EOF
+    fi
+
+    info "Repository initialized."
+    echo -e "  Remote: $(git remote get-url origin 2>/dev/null || echo 'not set')"
+    echo -e "  Use ${BOLD}./build-remote push${NC} to push and build."
+}
+
+# ── 3. Push Changes ─────────────────────────────────────────────
+cmd_push() {
+    step "Pushing Changes"
+
+    check_deps
+    check_auth
+    get_repo_info
+
+    local current_branch
+    current_branch=$(git branch --show-current)
+    [[ -z "$current_branch" ]] && current_branch="main"
+
+    # Check for uncommitted changes
+    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+        info "Staging and committing changes..."
+        git add -A
+        git commit -m "Update ISO configuration $(date +%Y-%m-%d)" || warn "Nothing to commit"
+    fi
+
+    info "Pushing to $REPO_FULL ($current_branch)..."
+    git push -u origin "$current_branch" || die "Push failed"
+
+    info "Push complete."
+    echo -e "  Use ${BOLD}./build-remote build${NC} to start a build."
+}
+
+# ── 4. Trigger Build ────────────────────────────────────────────
+cmd_build() {
+    local force=false
+    [[ "${1:-}" == "--force" ]] && force=true
+
+    step "Triggering Remote Build"
+
+    check_deps
+    check_auth
+    get_repo_info
+
+    # Push changes first
+    cmd_push
+
+    local run_id
+    if $force; then
+        info "Force triggering workflow..."
+        run_id=$(gh workflow run build-iso.yml --repo "$REPO_FULL" -f force=true --json databaseId -q '.databaseId' 2>/dev/null || echo "")
+    else
+        info "Triggering workflow..."
+        run_id=$(gh workflow run build-iso.yml --repo "$REPO_FULL" --json databaseId -q '.databaseId' 2>/dev/null || echo "")
+    fi
+
+    if [[ -z "$run_id" ]]; then
+        # Fallback: trigger via API
+        run_id=$(gh api repos/"$REPO_FULL"/actions/workflows/build-iso.yml/dispatches \
+            -X POST \
+            -f ref=main \
+            -f inputs.force="$force" 2>&1 | grep -o '"databaseId":[0-9]*' | cut -d: -f2 || echo "")
+
+        if [[ -z "$run_id" ]]; then
+            # Manual trigger via workflow_dispatch
+            gh workflow run build-iso.yml --repo "$REPO_FULL" --ref main || die "Failed to trigger workflow"
+            info "Workflow triggered. Run './build-remote poll' to monitor."
+            return 0
+        fi
+    fi
+
+    info "Build triggered! Run ID: $run_id"
+    echo -e "  Use ${BOLD}./build-remote poll${NC} to monitor progress."
+}
+
+# ── 5. Poll Status ──────────────────────────────────────────────
+cmd_poll() {
+    step "Polling Build Status"
+
+    check_deps
+    check_auth
+    get_repo_info
+
+    # Get latest run
+    local latest_run
+    latest_run=$(gh run list --repo "$REPO_FULL" --workflow build-iso.yml --limit 1 --json databaseId,status,conclusion,createdAt,headSha,event 2>/dev/null | jq '.[0]')
+
+    if [[ -z "$latest_run" || "$latest_run" == "null" ]]; then
+        die "No workflow runs found."
+    fi
+
+    local run_id status conclusion created sha event
+    run_id=$(echo "$latest_run" | jq -r '.databaseId')
+    status=$(echo "$latest_run" | jq -r '.status')
+    conclusion=$(echo "$latest_run" | jq -r '.conclusion // "pending"')
+    created=$(echo "$latest_run" | jq -r '.createdAt')
+    sha=$(echo "$latest_run" | jq -r '.headSha' | cut -c1-7)
+    event=$(echo "$latest_run" | jq -r '.event')
+
+    echo ""
+    echo -e "╭─ Arch ISO Remote Build ─────────────────────╮"
+    echo -e "│ Repository: ${BOLD}${REPO_FULL}${NC}"
+    echo -e "│ Run:        #${run_id}"
+    echo -e "│ Commit:     ${sha}"
+    echo -e "│ Event:      ${event}"
+    echo -e "│ Status:     ${BOLD}${status}${NC}"
+    echo -e "│ Started:    ${created}"
+    echo -e "╰─────────────────────────────────────────────╯"
+
+    if [[ "$status" == "completed" ]]; then
+        if [[ "$conclusion" == "success" ]]; then
+            echo -e "\n${GREEN}${BOLD}✅ BUILD SUCCEEDED${NC}"
+            echo -e "\n  Use ${BOLD}./build-remote download${NC} to fetch the ISO."
+        else
+            echo -e "\n${RED}${BOLD}❌ BUILD FAILED (${conclusion})${NC}"
+            echo -e "\n  Use ${BOLD}./build-remote logs${NC} to see failure details."
+        fi
+        return 0
+    fi
+
+    echo -e "\n${DIM}Polling every ${POLL_INTERVAL}s... (Ctrl+C to stop)${NC}"
+
+    local attempt=0
+    while [[ $attempt -lt $MAX_POLL_ATTEMPTS ]]; do
+        sleep "$POLL_INTERVAL"
+        attempt=$((attempt + 1))
+
+        latest_run=$(gh run list --repo "$REPO_FULL" --workflow build-iso.yml --limit 1 --json databaseId,status,conclusion 2>/dev/null | jq '.[0]')
+        status=$(echo "$latest_run" | jq -r '.status')
+        conclusion=$(echo "$latest_run" | jq -r '.conclusion // "pending"')
+
+        local elapsed
+        elapsed=$(format_duration $((attempt * POLL_INTERVAL)))
+
+        echo -ne "\r${DIM}[${elapsed}] Status: ${status}  ${conclusion}${NC}   "
+
+        if [[ "$status" == "completed" ]]; then
+            echo ""
+            if [[ "$conclusion" == "success" ]]; then
+                echo -e "\n${GREEN}${BOLD}✅ BUILD SUCCEEDED${NC}"
+                echo -e "  Use ${BOLD}./build-remote download${NC} to fetch the ISO."
+            else
+                echo -e "\n${RED}${BOLD}❌ BUILD FAILED (${conclusion})${NC}"
+                echo -e "  Use ${BOLD}./build-remote logs${NC} to see failure details."
+            fi
+            return 0
+        fi
+    done
+
+    echo -e "\n${YELLOW}Polling timeout reached.${NC}"
+    echo -e "  Check manually: ${BOLD}gh run view --repo $REPO_FULL${NC}"
+}
+
+# ── 6. Download Artifacts ───────────────────────────────────────
+cmd_download() {
+    step "Downloading ISO Artifact"
+
+    check_deps
+    check_auth
+    get_repo_info
+
+    # Get latest successful run
+    local latest_run
+    latest_run=$(gh run list --repo "$REPO_FULL" --workflow build-iso.yml --limit 1 --json databaseId,status,conclusion 2>/dev/null | jq '.[0]')
+
+    local run_id status conclusion
+    run_id=$(echo "$latest_run" | jq -r '.databaseId')
+    status=$(echo "$latest_run" | jq -r '.status')
+    conclusion=$(echo "$latest_run" | jq -r '.conclusion // "pending"')
+
+    if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+        die "Latest build not successful (status: $status, conclusion: $conclusion)"
+    fi
+
+    info "Latest successful run: #$run_id"
+
+    # Check disk space
+    get_disk_space
+
+    # Estimate artifact size
+    local artifacts
+    artifacts=$(gh api repos/"$REPO_FULL"/actions/runs/"$run_id"/artifacts --jq '.total_count' 2>/dev/null || echo "0")
+    info "Artifacts available: $artifacts"
+
+    # Create artifacts directory
+    mkdir -p "$ARTIFACT_DIR"
+
+    # Download
+    info "Downloading artifacts..."
+    gh run download "$run_id" \
+        --repo "$REPO_FULL" \
+        --dir "$ARTIFACT_DIR" \
+        --name "arch-custom-iso-$run_id" 2>/dev/null || \
+    gh run download "$run_id" \
+        --repo "$REPO_FULL" \
+        --dir "$ARTIFACT_DIR" 2>/dev/null || die "Download failed"
+
+    # Find the ISO
+    local iso_file
+    iso_file=$(find "$ARTIFACT_DIR" -name "*.iso" -type f 2>/dev/null | head -1)
+
+    if [[ -z "$iso_file" ]]; then
+        warn "No ISO file found in downloaded artifacts."
+        echo "Downloaded files:"
+        ls -la "$ARTIFACT_DIR"/ 2>/dev/null
+        return 1
+    fi
+
+    info "ISO downloaded: $iso_file"
+
+    # Verify checksum
+    local sha_file
+    sha_file=$(find "$ARTIFACT_DIR" -name "*.sha256" -type f 2>/dev/null | head -1)
+
+    if [[ -n "$sha_file" ]]; then
+        info "Verifying checksum..."
+        if sha256sum -c "$sha_file" 2>/dev/null; then
+            echo -e "${GREEN}✅ Checksum verified${NC}"
+        else
+            echo -e "${RED}❌ Checksum verification FAILED${NC}"
+            warn "The downloaded ISO may be corrupted."
+        fi
+    fi
+
+    # Report
+    echo -e "\n${BOLD}═══════════════════════════════════════${NC}"
+    echo -e "${BOLD}  Download Complete${NC}"
+    echo -e "${BOLD}═══════════════════════════════════════${NC}"
+    echo -e "  ISO:     $(basename "$iso_file")"
+    echo -e "  Size:    $(du -h "$iso_file" | cut -f1)"
+    echo -e "  Location: $iso_file"
+    echo -e ""
+
+    get_disk_space
+}
+
+# ── 7. View Logs ────────────────────────────────────────────────
+cmd_logs() {
+    step "Fetching Build Logs"
+
+    check_deps
+    check_auth
+    get_repo_info
+
+    local latest_run
+    latest_run=$(gh run list --repo "$REPO_FULL" --workflow build-iso.yml --limit 1 --json databaseId 2>/dev/null | jq -r '.[0].databaseId')
+
+    if [[ -z "$latest_run" || "$latest_run" == "null" ]]; then
+        die "No runs found."
+    fi
+
+    info "Fetching logs for run #$latest_run..."
+    gh run view "$latest_run" --repo "$REPO_FULL" --log-failed 2>/dev/null || \
+    gh run view "$latest_run" --repo "$REPO_FULL" --log 2>/dev/null || \
+    warn "Could not fetch logs. Try: gh run view $latest_run --repo $REPO_FULL --log"
+}
+
+# ── 8. Clean Local Artifacts ────────────────────────────────────
+cmd_clean() {
+    step "Cleaning Local Artifacts"
+
+    local freed=0
+
+    if [[ -d "$ARTIFACT_DIR" ]]; then
+        local size
+        size=$(du -sh "$ARTIFACT_DIR" 2>/dev/null | cut -f1)
+        info "Removing artifacts directory ($size)..."
+        rm -rf "$ARTIFACT_DIR"
+        info "Freed: $size"
+    fi
+
+    # Clean build logs
+    rm -f "$SCRIPT_DIR"/*.log 2>/dev/null
+
+    # Clean any temporary files
+    rm -rf "$SCRIPT_DIR/build" 2>/dev/null
+    rm -rf "$SCRIPT_DIR/work" 2>/dev/null
+    rm -rf "$SCRIPT_DIR/out" 2>/dev/null
+
+    info "Cleanup complete."
+    get_disk_space
+}
+
+# ── 9. Force Rebuild ───────────────────────────────────────────
+cmd_force() {
+    cmd_build --force
+}
+
+# ── 10. Full Build Pipeline ────────────────────────────────────
+cmd_all() {
+    step "Full Build Pipeline"
+
+    echo -e "${BOLD}Step 1:${NC} Check environment"
+    cmd_status || true
+
+    echo ""
+    echo -e "${BOLD}Step 2:${NC} Push changes"
+    cmd_push
+
+    echo ""
+    echo -e "${BOLD}Step 3:${NC} Trigger build"
+    cmd_build
+
+    echo ""
+    echo -e "${BOLD}Step 4:${NC} Poll for completion"
+    cmd_poll
+
+    echo ""
+    echo -e "${BOLD}Step 5:${NC} Download artifact"
+    cmd_download
+
+    echo ""
+    echo -e "${BOLD}Step 6:${NC} Clean up"
+    cmd_clean
+}
+
+# ── Help ────────────────────────────────────────────────────────
+cmd_help() {
+    echo -e "${CYAN}${BOLD}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}${BOLD}║    Arch Custom — Remote Build Controller     ║${NC}"
+    echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${BOLD}Usage:${NC} ./build-remote [command]"
+    echo ""
+    echo -e "${BOLD}Commands:${NC}"
+    echo -e "  ${GREEN}status${NC}      Check local environment and repo status"
+    echo -e "  ${GREEN}init${NC}        Initialize GitHub repository"
+    echo -e "  ${GREEN}push${NC}        Push changes to GitHub"
+    echo -e "  ${GREEN}build${NC}       Push and trigger ISO build"
+    echo -e "  ${GREEN}force${NC}       Force rebuild (ignore path filtering)"
+    echo -e "  ${GREEN}poll${NC}        Poll build status until completion"
+    echo -e "  ${GREEN}download${NC}    Download ISO artifact"
+    echo -e "  ${GREEN}logs${NC}        View build logs"
+    echo -e "  ${GREEN}clean${NC}       Clean local artifacts"
+    echo -e "  ${GREEN}all${NC}         Run full pipeline (push → build → poll → download)"
+    echo -e "  ${GREEN}help${NC}        Show this help"
+    echo ""
+    echo -e "${BOLD}Examples:${NC}"
+    echo -e "  ./build-remote all          # Run everything"
+    echo -e "  ./build-remote build        # Push and build"
+    echo -e "  ./build-remote poll         # Watch current build"
+    echo -e "  ./build-remote download     # Get the latest ISO"
+    echo -e "  ./build-remote --status     # Same as status"
+    echo -e "  ./build-remote --force      # Force rebuild"
+    echo -e "  ./build-remote --download   # Same as download"
+    echo -e "  ./build-remote --clean      # Same as clean"
+    echo ""
+}
+
+# ── Main ────────────────────────────────────────────────────────
+main() {
+    cd "$SCRIPT_DIR"
+
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        status|--status|-s)  cmd_status ;;
+        init)                cmd_init ;;
+        push)                cmd_push ;;
+        build|--build|-b)    cmd_build "$@" ;;
+        force|--force|-f)    cmd_force ;;
+        poll|--poll|-p)      cmd_poll ;;
+        download|--download|-d) cmd_download ;;
+        logs|--logs|-l)      cmd_logs ;;
+        clean|--clean|-c)    cmd_clean ;;
+        all|--all|-a)        cmd_all ;;
+        help|--help|-h)      cmd_help ;;
+        *)
+            error "Unknown command: $cmd"
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
