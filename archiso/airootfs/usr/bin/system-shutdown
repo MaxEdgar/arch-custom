@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# system-shutdown — Safely shut down the system
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+echo -e "\033[1;33mShutting down...\033[0m"
+
+if command -v systemctl &>/dev/null; then
+    sudo systemctl poweroff
+elif command -v halt &>/dev/null; then
+    sudo halt -p
+elif command -v shutdown &>/dev/null; then
+    sudo shutdown -h now
+else
+    echo "Error: No shutdown mechanism found." >&2
+    exit 1
+fi

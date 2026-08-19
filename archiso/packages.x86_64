@@ -8,7 +8,6 @@ base
 linux
 linux-firmware
 linux-headers
-firmware
 mkinitcpio
 systemd
 systemd-sysvcompat
@@ -21,7 +20,6 @@ syslinux
 syslinux-efi
 mtools
 dosfstools
-ldnntp
 
 # ── Filesystem / Storage ──────────────────────────────────────────
 e2fsprogs
@@ -29,7 +27,6 @@ btrfs-progs
 xfsprogs
 f2fs-tools
 ntfs-3g
-dosfstools
 lvm2
 mdadm
 cryptsetup
@@ -48,59 +45,45 @@ zstd
 
 # ── Networking ────────────────────────────────────────────────────
 networkmanager
-network-manager-applet
 wpa_supplicant
 iw
 iwd
-wireless_tools
-openvpn
-wireguard-tools
 curl
 wget
 openssh
 rsync
-net-tools
 iproute2
 iputils
-dhcp
-bind
-# nftables or iptables-nft for firewall
 nftables
-avahi
+
+# ── DNS ───────────────────────────────────────────────────────────
+# systemd-resolved is included with systemd
 
 # ── Shell / CLI ───────────────────────────────────────────────────
 bash
 bash-completion
 zsh
+zsh-completions
 fish
 fish-completion
-zsh-completions
-coreutils
 procps-ng
-which
 tree
 ripgrep
 fd
 fzf
 bat
 eza
-starship
-fastfetch
 man-db
 man-pages
 
 # ── Editor ────────────────────────────────────────────────────────
 nano
 vim
-neovim
 
 # ── Hardware Detection ────────────────────────────────────────────
 hwinfo
-lscpu
 pciutils
 usbutils
-lsusb
-lsscsi
 hdparm
 smartmontools
 lm_sensors
@@ -114,14 +97,11 @@ amd-ucode
 
 # ── GPU / Graphics ────────────────────────────────────────────────
 mesa
-lib32-mesa
 vulkan-icd-loader
-lib32-vulkan-icd-loader
 vulkan-tools
 libva-mesa-driver
 mesa-vdpau
 xf86-video-amdgpu
-xf86-video-ati
 xf86-video-nouveau
 xf86-video-intel
 xf86-video-vesa
@@ -145,7 +125,6 @@ wireplumber
 alsa-utils
 alsa-firmware
 sof-firmware
-# PulseAudio compatibility layer
 pulseaudio
 
 # ── Fonts ─────────────────────────────────────────────────────────
@@ -159,28 +138,19 @@ ttf-liberation
 # ── TUI / Installer deps ──────────────────────────────────────────
 whiptail
 dialog
-gum
-ansi
 
 # ── Base-devel (for AUR support) ──────────────────────────────────
 base-devel
 sudo
 
-# ── Console / Terminal ────────────────────────────────────────────
-kitty
-alacritty
-foot
-
 # ── Misc essentials ───────────────────────────────────────────────
 git
 pacman-contrib
 reflector
-rsync
-rsync
 haveged
 cronie
 logrotate
- less
+less
 which
 file
 unzip
@@ -191,3 +161,4 @@ fakeroot
 make
 gcc
 binutils
+bc

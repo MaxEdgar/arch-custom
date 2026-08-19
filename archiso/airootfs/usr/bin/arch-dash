@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# arch-dash — Arch Custom Metrics Dashboard Launcher
+# Launches the full-screen TTY metrics dashboard.
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+_LIBDIR="/usr/lib/arch-custom"
+
+# Source and run the dashboard
+source "$_LIBDIR/cli/config.sh"
+source "$_LIBDIR/cli/rendering.sh"
+source "$_LIBDIR/cli/input.sh"
+source "$_LIBDIR/metrics/cpu.sh"
+source "$_LIBDIR/metrics/ram.sh"
+source "$_LIBDIR/metrics/temp.sh"
+source "$_LIBDIR/metrics/gpu.sh"
+source "$_LIBDIR/metrics/disk.sh"
+source "$_LIBDIR/metrics/network.sh"
+source "$_LIBDIR/metrics/battery.sh"
+source "$_LIBDIR/cli/dashboard.sh"
+
+config_load
+dashboard_run

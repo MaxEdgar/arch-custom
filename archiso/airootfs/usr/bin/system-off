@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# system-off — Turn display off without shutting down
+# Computer remains running, TTY remains active, display turns off.
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+display_off() {
+    # Method 1: vblank mode via DPMS (works on many setups)
+    if command -v setter &>/dev/null; then
+        setter dpms off 2>/dev/null && return 0
+    fi
+
+    # Method 2: xset DPMS (if X is available)
+    if command -v xset &>/dev/null && [[ -n "${DISPLAY:-}" ]]; then
+        xset dpms force off 2>/dev/null && return 0
+    fi
+
+    # Method 3: Console blanking via setterm (TTY)
+    if command -v setterm &>/dev/null; then
+        setterm --blank 1 --powersave on > /dev/null 2>&1 && return 0
+    fi
+
+    # Method 4: Kernel console blank
+    if [[ -w /sys/class/vt/vt0/blank ]]; then
+        echo 1 > /sys/class/vt/vt0/blank 2>/dev/null && return 0
+    fi
+
+    # Method 5: Force console blank via escape sequence
+    printf '\033[9'  # Start blanking
+
+    echo "Display turned off."
+    echo "Press any key or move mouse to wake."
+    return 0
+}
+
+# Wait for user to wake up
+wake_wait() {
+    # Wait for any input
+    read -rsn1 2>/dev/null || true
+
+    # Unblank display
+    if command -v setterm &>/dev/null; then
+        setterm --blank 0 --powersave off > /dev/null 2>&1
+    fi
+
+    if [[ -w /sys/class/vt/vt0/blank ]]; then
+        echo 0 > /sys/class/vt/vt0/blank 2>/dev/null
+    fi
+
+    printf '\033[17;0;0c'  # Request terminal attributes (wake)
+    printf '\033[15'        # Restore screen
+}
+
+# Parse arguments
+case "${1:-}" in
+    --help|-h)
+        echo "system-off — Turn display off without shutting down"
+        echo ""
+        echo "Usage: system-off [--help]"
+        echo ""
+        echo "Turns off the display while keeping the system running."
+        echo "Press any key to wake the display."
+        ;;
+    *)
+        display_off
+        wake_wait
+        ;;
+esac

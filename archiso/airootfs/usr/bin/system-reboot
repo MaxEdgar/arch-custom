@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# system-reboot — Safely reboot the system
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+echo -e "\033[1;33mRebooting...\033[0m"
+
+if command -v systemctl &>/dev/null; then
+    sudo systemctl reboot
+elif command -v reboot &>/dev/null; then
+    sudo reboot
+elif command -v shutdown &>/dev/null; then
+    sudo shutdown -r now
+else
+    echo "Error: No reboot mechanism found." >&2
+    exit 1
+fi

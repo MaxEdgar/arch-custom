@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# system-sleep — Suspend the system
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+echo -e "\033[1;33mSuspending...\033[0m"
+
+# Check if suspend is supported
+if [[ -f /sys/power/state ]]; then
+    if grep -q "mem" /sys/power/state 2>/dev/null; then
+        if command -v systemctl &>/dev/null; then
+            sudo systemctl suspend
+        elif command -v pm-suspend &>/dev/null; then
+            sudo pm-suspend
+        else
+            echo "Error: No suspend mechanism found." >&2
+            exit 1
+        fi
+    else
+        echo "Error: System does not support suspend (mem)." >&2
+        echo "Available states:" >&2
+        cat /sys/power/state >&2
+        exit 1
+    fi
+else
+    echo "Error: /sys/power/state not found." >&2
+    exit 1
+fi
