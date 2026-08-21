@@ -134,7 +134,6 @@ ttf-dejavu
 ttf-liberation
 
 # ── TUI / Installer deps ──────────────────────────────────────────
-newt
 dialog
 
 # ── Base-devel (for AUR support) ──────────────────────────────────
