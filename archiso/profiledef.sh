@@ -7,11 +7,11 @@ iso_publisher="Arch Custom <https://github.com/MaxEdgar/arch-custom>"
 iso_application="Arch Custom Linux — Minimal Install"
 iso_version="$(date +%Y.%m.%d)"
 install_dir="arch"
-buildmodes=()
+buildmodes=('iso')
 bootmodes=(
     'bios/syslinux/syslinux.bin'
     'uefi-x64/grub/grubx64.efi'
 )
 arch="x86_64"
 kernel=('linux')
-mkarchiso_opts=("-v")
+airootfs_image_type=airootfs
