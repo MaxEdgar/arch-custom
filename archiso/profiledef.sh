@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # profiledef.sh — Arch Custom ISO Profile Definition
-# Defines the ISO build parameters for the archiso tool.
 
 iso_name="arch-custom"
 iso_label="ARCH_CUSTOM_$(date +%Y%m)"
@@ -14,5 +13,5 @@ bootmodes=(
     'uefi-x64/grub/grubx64.efi'
 )
 arch="x86_64"
-kernel=()
+kernel=('linux')
 mkarchiso_opts=("-v")
