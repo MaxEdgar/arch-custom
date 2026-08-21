@@ -64,7 +64,7 @@ jobs:
           mkdir -p out
 
           # Run entire build inside an Arch Linux container
-          docker run --rm \
+          docker run --rm --privileged \
             -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/out:/out" \
             archlinux:latest \
