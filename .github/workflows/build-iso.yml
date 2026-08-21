@@ -166,6 +166,7 @@ jobs:
 
           # Generate checksums
           cd out
+          ISO_FILE="$FINAL_NAME"
           sha256sum "$FINAL_NAME" > "${FINAL_NAME}.sha256"
           sha512sum "$FINAL_NAME" > "${FINAL_NAME}.sha512"
 
