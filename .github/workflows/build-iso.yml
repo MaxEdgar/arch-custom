@@ -135,6 +135,11 @@ jobs:
               cp "$WORKDIR/out/"*.sha256 /out/ 2>/dev/null || true
             '
 
+          # Fix ownership of output files (Docker creates as root)
+          echo "Output files:"
+          ls -la out/ 2>/dev/null || echo "Output dir empty or missing"
+          sudo chown -R runner:runner out/ 2>/dev/null || true
+
           BUILD_END=$(date +%s)
           BUILD_TIME=$((BUILD_END - BUILD_START))
           echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
