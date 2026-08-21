@@ -17,7 +17,6 @@ kmod
 # ── Boot ──────────────────────────────────────────────────────────
 grub
 syslinux
-syslinux-efi
 mtools
 dosfstools
 
@@ -65,7 +64,6 @@ bash-completion
 zsh
 zsh-completions
 fish
-fish-completion
 procps-ng
 tree
 ripgrep
@@ -100,7 +98,7 @@ mesa
 vulkan-icd-loader
 vulkan-tools
 libva-mesa-driver
-mesa-vdpau
+
 xf86-video-amdgpu
 xf86-video-nouveau
 xf86-video-intel
@@ -136,7 +134,7 @@ ttf-dejavu
 ttf-liberation
 
 # ── TUI / Installer deps ──────────────────────────────────────────
-whiptail
+newt
 dialog
 
 # ── Base-devel (for AUR support) ──────────────────────────────────
