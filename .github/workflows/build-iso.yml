@@ -60,6 +60,9 @@ jobs:
           BUILD_START=$(date +%s)
           echo "Starting build at $(date)"
 
+          # Create output dir
+          mkdir -p out
+
           # Run entire build inside an Arch Linux container
           docker run --rm \
             -v "${{ github.workspace }}:/src:ro" \
@@ -96,63 +99,40 @@ jobs:
               WORKDIR=/build
               mkdir -p "$WORKDIR/work" "$WORKDIR/out"
 
-              # Use the installed archiso
-              # mkarchiso is at /usr/bin/mkarchiso
-
               # Copy our profile
               echo "Copying profile..."
               cp -r /src/archiso "$WORKDIR/profile"
 
               # Ensure scripts are executable
-              chmod -R +x "$WORKDIR/profile/airootfs/usr/bin/" 2>/dev/null || true
-              chmod -R +x "$WORKDIR/profile/airootfs/usr/share/" 2>/dev/null || true
-              chmod -R +x "$WORKDIR/profile/airootfs/usr/lib/" 2>/dev/null || true
+              find "$WORKDIR/profile/airootfs" -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
+              find "$WORKDIR/profile/airootfs/usr/bin" -type f -exec chmod +x {} + 2>/dev/null || true
+              find "$WORKDIR/profile/airootfs/usr/lib" -type f -exec chmod +x {} + 2>/dev/null || true
 
               echo "Profile structure:"
               find "$WORKDIR/profile" -type f | head -50
 
-              # Debug: source profiledef.sh and print all variables
-              echo "═══ Debug profiledef.sh ═══"
-              cd "$WORKDIR/profile"
-              source profiledef.sh || true
-              echo "iso_name=$iso_name"
-              echo "iso_label=$iso_label"
-              echo "iso_publisher=$iso_publisher"
-              echo "iso_application=$iso_application"
-              echo "iso_version=$iso_version"
-              echo "install_dir=$install_dir"
-              echo "buildmodes=${buildmodes[@]}"
-              echo "bootmodes=${bootmodes[@]}"
-              echo "arch=$arch"
-              echo "kernel=${kernel[@]}"
+              # Show profiledef.sh (for debugging, without sourcing)
               echo ""
+              echo "═══ profiledef.sh ═══"
+              cat "$WORKDIR/profile/profiledef.sh"
 
-              # Try running mkarchiso with strace/debug
-              echo "═══ Running mkarchiso ═══"
-              bash -x /usr/bin/mkarchiso \
-                -v \
+              # Build the ISO
+              echo ""
+              echo "═══ Building ISO ═══"
+
+              mkarchiso -v \
                 -w "$WORKDIR/work" \
                 -o "$WORKDIR/out" \
-                "$WORKDIR/profile" 2>&1 | head -100
-              MKEXIT=${PIPESTATUS[0]}
-              echo "mkarchiso exit code: $MKEXIT"
+                "$WORKDIR/profile"
 
-              if [ "$MKEXIT" -ne 0 ]; then
-                echo ""
-                echo "═══ Retrying without bash -x ═══"
-                mkarchiso -v \
-                  -w "$WORKDIR/work" \
-                  -o "$WORKDIR/out" \
-                  "$WORKDIR/profile" 2>&1 | tail -50
-              fi
+              echo ""
+              echo "═══ Build Complete ═══"
+              ls -lh "$WORKDIR/out/"*.iso 2>/dev/null || echo "No ISO found!"
+              ls -lh "$WORKDIR/out/" 2>/dev/null || echo "Output dir empty!"
 
               # Copy output
               cp "$WORKDIR/out/"*.iso /out/ 2>/dev/null || true
               cp "$WORKDIR/out/"*.sha256 /out/ 2>/dev/null || true
-
-              echo ""
-              echo "═══ Build Complete ═══"
-              ls -lh /out/*.iso 2>/dev/null || echo "No ISO found!"
             '
 
           BUILD_END=$(date +%s)
